@@ -17,10 +17,10 @@ public class AttendanceLogAnalyzer {
     // Store valid employees to detect absences
     public static final List<String> ALL_EMPLOYEES = Arrays.asList("EMP101", "EMP102", "EMP103", "EMP104", "EMP105");
 
-    private TreeMap<String, List<AttendanceLog>> attendanceMap;
+    private DatabaseManager dbManager;
 
     public AttendanceLogAnalyzer() {
-        this.attendanceMap = new TreeMap<>();
+        this.dbManager = new DatabaseManager();
     }
 
     public void parseAndAddLog(String logEntry) {
@@ -45,11 +45,11 @@ public class AttendanceLogAnalyzer {
                 return;
             }
 
+            // Validate the log
             AttendanceLog log = new AttendanceLog(employeeId, action, date, timeStr);
 
-            // Add to TreeMap, creating a new list if the employee doesn't exist yet
-            attendanceMap.putIfAbsent(employeeId, new ArrayList<>());
-            attendanceMap.get(employeeId).add(log);
+            // Insert into database
+            dbManager.insertLog(employeeId, action, date, timeStr);
 
         } catch (DateTimeParseException e) {
             LOGGER.log(Level.WARNING, "Invalid time format in log entry: " + logEntry, e);
@@ -77,7 +77,7 @@ public class AttendanceLogAnalyzer {
             throw new IllegalArgumentException("Employee ID format must be EMPXXX (e.g., EMP101)");
         }
 
-        // Sanitize inputs — reject special characters that could break file I/O
+        // Sanitize inputs — reject special characters that could break parsing
         if (containsUnsafeChars(action) || containsUnsafeChars(date) || containsUnsafeChars(timeStr)) {
             throw new IllegalArgumentException("Input contains invalid special characters.");
         }
@@ -88,7 +88,7 @@ public class AttendanceLogAnalyzer {
         }
 
         // Validate login/logout sequencing
-        String lastAction = getLastAction(employeeId);
+        String lastAction = dbManager.getLastAction(employeeId);
 
         if ("LOGIN".equals(action) && "LOGIN".equals(lastAction)) {
             throw new IllegalArgumentException(
@@ -103,8 +103,7 @@ public class AttendanceLogAnalyzer {
         }
 
         // Validation passed — add the log
-        String logEntry = String.format("%s | %s | %s | %s", employeeId, action, date, timeStr);
-        parseAndAddLog(logEntry);
+        dbManager.insertLog(employeeId, action, date, timeStr);
     }
 
     /**
@@ -124,19 +123,24 @@ public class AttendanceLogAnalyzer {
     public Map<String, String> calculateTotalDurations(String targetDate) {
         Map<String, String> durationReport = new LinkedHashMap<>();
 
-        attendanceMap.forEach((empId, logs) -> {
+        List<AttendanceLog> allLogs = "All Dates".equals(targetDate) || targetDate == null
+            ? dbManager.getAllLogs()
+            : dbManager.getLogsByDate(targetDate);
+
+        // Group logs by employee
+        Map<String, List<AttendanceLog>> logsPerEmployee = allLogs.stream()
+            .collect(Collectors.groupingBy(AttendanceLog::getEmployeeId));
+
+        logsPerEmployee.forEach((empId, logs) -> {
             long totalMinutes = 0;
             AttendanceLog lastLogin = null;
 
-            // Filter by date and sort
-            List<AttendanceLog> filteredLogs = logs.stream()
-                .filter(log -> targetDate == null || "All Dates".equals(targetDate) || log.getDate().equals(targetDate))
+            // Sort logs chronologically
+            List<AttendanceLog> sortedLogs = logs.stream()
                 .sorted(Comparator.comparing(AttendanceLog::getTime))
                 .collect(Collectors.toList());
 
-            if (filteredLogs.isEmpty()) return;
-
-            for (AttendanceLog log : filteredLogs) {
+            for (AttendanceLog log : sortedLogs) {
                 if ("LOGIN".equals(log.getAction())) {
                     lastLogin = log;
                 } else if ("LOGOUT".equals(log.getAction()) && lastLogin != null) {
@@ -171,12 +175,7 @@ public class AttendanceLogAnalyzer {
      * Extract a list of distinct dates present in the logs.
      */
     public List<String> getUniqueDates() {
-        return getAllLogs().stream()
-            .map(AttendanceLog::getDate)
-            .filter(d -> !"N/A".equals(d))
-            .distinct()
-            .sorted()
-            .collect(Collectors.toList());
+        return dbManager.getUniqueDates();
     }
 
     /**
@@ -186,11 +185,11 @@ public class AttendanceLogAnalyzer {
         if (targetDate == null || "All Dates".equals(targetDate)) {
             return new ArrayList<>();
         }
-        
-        Set<String> presentIds = getFilteredLogs(targetDate).stream()
+
+        Set<String> presentIds = dbManager.getLogsByDate(targetDate).stream()
                 .map(AttendanceLog::getEmployeeId)
                 .collect(Collectors.toSet());
-                
+
         return ALL_EMPLOYEES.stream()
                 .filter(emp -> !presentIds.contains(emp))
                 .collect(Collectors.toList());
@@ -203,9 +202,7 @@ public class AttendanceLogAnalyzer {
         if (targetDate == null || "All Dates".equals(targetDate)) {
             return getAllLogs();
         }
-        return getAllLogs().stream()
-            .filter(log -> log.getDate().equals(targetDate))
-            .collect(Collectors.toList());
+        return dbManager.getLogsByDate(targetDate);
     }
 
     public List<AttendanceLog> getLogsAfter9AM(String targetDate) {
@@ -215,10 +212,7 @@ public class AttendanceLogAnalyzer {
     }
 
     public List<AttendanceLog> getAllLogs() {
-        // Flatten the TreeMap into a single List for the GUI Table and File Saving
-        return attendanceMap.values().stream()
-                .flatMap(List::stream)
-                .collect(Collectors.toList());
+        return dbManager.getAllLogs();
     }
 
     public List<AttendanceLog> getLogsAfter9AM() {
@@ -226,27 +220,19 @@ public class AttendanceLogAnalyzer {
     }
 
     /**
-     * NEW: Filter logs by specific employee ID
+     * Filter logs by specific employee ID
      * Returns all attendance records for a given employee
-     * Efficient O(log n) lookup using TreeMap
      */
     public List<AttendanceLog> getLogsByEmployeeId(String employeeId) {
-        List<AttendanceLog> logs = attendanceMap.get(employeeId);
-        if (logs == null) {
-            return Collections.emptyList();
-        }
-        // Return a sorted copy (by time)
-        List<AttendanceLog> sortedLogs = new ArrayList<>(logs);
-        sortedLogs.sort(Comparator.comparing(AttendanceLog::getTime));
-        return sortedLogs;
+        return dbManager.getLogsByEmployeeId(employeeId);
     }
 
     /**
-     * NEW: Get total working hours for a specific employee
+     * Get total working hours for a specific employee
      * Returns a formatted string with hours and minutes
      */
     public String getTotalDurationForEmployee(String employeeId) {
-        List<AttendanceLog> logs = attendanceMap.get(employeeId);
+        List<AttendanceLog> logs = dbManager.getLogsByEmployeeId(employeeId);
         if (logs == null || logs.isEmpty()) {
             return "No data available";
         }
@@ -255,8 +241,9 @@ public class AttendanceLogAnalyzer {
         AttendanceLog lastLogin = null;
 
         // Sort logs chronologically
-        List<AttendanceLog> sortedLogs = new ArrayList<>(logs);
-        sortedLogs.sort(Comparator.comparing(AttendanceLog::getTime));
+        List<AttendanceLog> sortedLogs = logs.stream()
+            .sorted(Comparator.comparing(AttendanceLog::getTime))
+            .collect(Collectors.toList());
 
         for (AttendanceLog log : sortedLogs) {
             if ("LOGIN".equals(log.getAction())) {
@@ -274,22 +261,23 @@ public class AttendanceLogAnalyzer {
 
     /**
      * Get the last action (LOGIN/LOGOUT) for a specific employee.
-     * Efficient O(log n) TreeMap lookup + O(1) list tail access.
      * Returns null if the employee has no records.
      */
     public String getLastAction(String employeeId) {
-        List<AttendanceLog> logs = attendanceMap.get(employeeId);
-        if (logs == null || logs.isEmpty()) {
-            return null;
-        }
-        return logs.get(logs.size() - 1).getAction();
+        return dbManager.getLastAction(employeeId);
     }
 
     /**
-     * NEW: Check if employee exists in the system
+     * Check if employee exists in the system
      */
     public boolean employeeExists(String employeeId) {
-        return attendanceMap.containsKey(employeeId);
+        return dbManager.employeeExists(employeeId);
+    }
+
+    // --- DATABASE OPERATIONS ---
+
+    public void clearAllLogs() {
+        dbManager.clearAllLogs();
     }
 
     // --- FILE I/O OPERATIONS ---
@@ -342,35 +330,9 @@ public class AttendanceLogAnalyzer {
     }
 
 
-    // --- CONSOLE ENTRY POINT ---
-
     public static void main(String[] args) {
         AttendanceLogAnalyzer analyzer = new AttendanceLogAnalyzer();
         Scanner scanner = new Scanner(System.in);
-
-        // Load static random sample data across multiple dates
-        String d1 = "14-Feb-2026";
-        String d2 = "03-Mar-2026";
-        String d3 = "22-Apr-2026";
-        String d4 = "10-May-2026";
-        String d5 = "01-Jun-2026";
-
-        String[] sampleLogs = {
-            "EMP101 | LOGIN | " + d1 + " | 09:05 AM",
-            "EMP101 | LOGOUT | " + d1 + " | 05:30 PM",
-            "EMP102 | LOGIN | " + d2 + " | 08:45 AM",
-            "EMP102 | LOGOUT | " + d2 + " | 06:00 PM",
-            "EMP103 | LOGIN | " + d3 + " | 09:15 AM",
-            "EMP103 | LOGOUT | " + d3 + " | 05:45 PM",
-            "EMP104 | LOGIN | " + d4 + " | 08:30 AM",
-            "EMP104 | LOGOUT | " + d4 + " | 04:30 PM",
-            "EMP105 | LOGIN | " + d5 + " | 09:30 AM",
-            "EMP105 | LOGOUT | " + d5 + " | 06:15 PM"
-        };
-        for (String log : sampleLogs) {
-            analyzer.parseAndAddLog(log);
-        }
-        System.out.println("Sample data loaded (" + sampleLogs.length + " entries).\n");
 
         boolean running = true;
         while (running) {
@@ -381,7 +343,8 @@ public class AttendanceLogAnalyzer {
             System.out.println("4. Calculate Durations");
             System.out.println("5. Show Statistics");
             System.out.println("6. Search Employee");
-            System.out.println("7. Exit");
+            System.out.println("7. Load Sample Data (for testing)");
+            System.out.println("8. Exit");
             System.out.print("Choose an option: ");
 
             String choice = scanner.nextLine().trim();
@@ -452,12 +415,38 @@ public class AttendanceLogAnalyzer {
                     break;
 
                 case "7":
+                    // Load sample data for testing
+                    String d1 = "14-Feb-2026";
+                    String d2 = "03-Mar-2026";
+                    String d3 = "22-Apr-2026";
+                    String d4 = "10-May-2026";
+                    String d5 = "01-Jun-2026";
+
+                    String[] sampleLogs = {
+                        "EMP101 | LOGIN | " + d1 + " | 09:05 AM",
+                        "EMP101 | LOGOUT | " + d1 + " | 05:30 PM",
+                        "EMP102 | LOGIN | " + d2 + " | 08:45 AM",
+                        "EMP102 | LOGOUT | " + d2 + " | 06:00 PM",
+                        "EMP103 | LOGIN | " + d3 + " | 09:15 AM",
+                        "EMP103 | LOGOUT | " + d3 + " | 05:45 PM",
+                        "EMP104 | LOGIN | " + d4 + " | 08:30 AM",
+                        "EMP104 | LOGOUT | " + d4 + " | 04:30 PM",
+                        "EMP105 | LOGIN | " + d5 + " | 09:30 AM",
+                        "EMP105 | LOGOUT | " + d5 + " | 06:15 PM"
+                    };
+                    for (String log : sampleLogs) {
+                        analyzer.parseAndAddLog(log);
+                    }
+                    System.out.println("Sample data loaded (" + sampleLogs.length + " entries).\n");
+                    break;
+
+                case "8":
                     running = false;
                     System.out.println("Goodbye!");
                     break;
 
                 default:
-                    System.out.println("Invalid option. Please choose 1-7.");
+                    System.out.println("Invalid option. Please choose 1-8.");
             }
             System.out.println();
         }

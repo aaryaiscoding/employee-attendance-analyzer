@@ -64,7 +64,7 @@ public class AttendanceGUI extends JFrame {
 
         add(scrollPane, BorderLayout.CENTER);
 
-        loadSampleData();
+        refreshTable();
     }
 
     private JPanel createHeaderPanel() {
