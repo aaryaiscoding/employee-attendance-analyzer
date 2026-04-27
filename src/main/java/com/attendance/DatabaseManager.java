@@ -9,7 +9,7 @@ import java.util.logging.Logger;
 public class DatabaseManager {
 
     private static final Logger LOGGER = Logger.getLogger(DatabaseManager.class.getName());
-    private static final String DATABASE_URL = "jdbc:sqlite:attendance.db";
+    private static final String DATABASE_URL = "jdbc:sqlite:" + System.getProperty("user.home") + "/attendance.db";
     private static final String TABLE_NAME = "attendance_logs";
 
     public DatabaseManager() {

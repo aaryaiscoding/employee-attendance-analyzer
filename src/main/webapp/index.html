@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Attendance Analyzer</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 1.5rem; color: #1f2937; background: #f9fafb; }
+        h1 { margin-top: 0; }
+        .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+        .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+        input, select, button { padding: 0.5rem; border: 1px solid #cbd5e1; border-radius: 6px; }
+        button { cursor: pointer; background: #2563eb; color: #fff; border-color: #1d4ed8; }
+        button.secondary { background: #374151; border-color: #111827; }
+        button.warn { background: #dc2626; border-color: #b91c1c; }
+        table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+        th, td { border: 1px solid #e5e7eb; padding: 0.5rem; text-align: left; }
+        th { background: #f3f4f6; }
+        #status { margin-top: 0.5rem; font-weight: bold; }
+        #output { background: #111827; color: #e5e7eb; padding: 0.75rem; border-radius: 6px; min-height: 160px; overflow: auto; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+<h1>Employee Attendance Analyzer</h1>
+
+<div class="card">
+    <div class="row">
+        <strong>Add New Attendance Log</strong>
+    </div>
+    <div class="row">
+        <input type="text" id="employeeId" placeholder="Employee ID (e.g. EMP101)">
+        <button onclick="submitLog('LOGIN')">LOGIN</button>
+        <button onclick="submitLog('LOGOUT')">LOGOUT</button>
+        <button class="secondary" onclick="loadSampleData()">Load Sample Data</button>
+        <button class="warn" onclick="clearAllLogs()">Clear All Logs</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="row">
+        <label for="dateFilter"><strong>View Date:</strong></label>
+        <select id="dateFilter" onchange="refreshAll()">
+            <option value="All Dates">All Dates</option>
+        </select>
+        <button onclick="showAllLogs()">Display All Logs</button>
+        <button onclick="showLateLogins()">Late Logins (&gt;9AM)</button>
+        <button onclick="showDurations()">Calculate Durations</button>
+        <button onclick="showStatistics()">Show Statistics</button>
+        <button onclick="showAbsentees()">Show Absentees</button>
+    </div>
+    <div class="row">
+        <input type="text" id="searchEmployeeId" placeholder="Search employee (EMPXXX)">
+        <button class="secondary" onclick="searchEmployee()">Search Employee</button>
+    </div>
+</div>
+
+<div id="status"></div>
+
+<div class="card">
+    <strong>Attendance Logs</strong>
+    <table>
+        <thead>
+        <tr>
+            <th>Employee ID</th>
+            <th>Action</th>
+            <th>Date</th>
+            <th>Time</th>
+        </tr>
+        </thead>
+        <tbody id="logsBody"></tbody>
+    </table>
+</div>
+
+<div class="card">
+    <strong>Analysis Output</strong>
+    <pre id="output">Ready.</pre>
+</div>
+
+<script>
+    function apiBase() {
+        return 'api/attendance';
+    }
+
+    function selectedDate() {
+        return document.getElementById('dateFilter').value;
+    }
+
+    function updateStatus(message, isError) {
+        const status = document.getElementById('status');
+        status.textContent = message;
+        status.style.color = isError ? '#dc2626' : '#065f46';
+    }
+
+    function setOutput(text) {
+        document.getElementById('output').textContent = text;
+    }
+
+    async function callGet(operation, extraParams) {
+        const params = new URLSearchParams({ operation: operation });
+        if (selectedDate() && selectedDate() !== 'All Dates') {
+            params.set('date', selectedDate());
+        }
+        if (extraParams) {
+            Object.keys(extraParams).forEach(key => {
+                if (extraParams[key] !== null && extraParams[key] !== undefined && extraParams[key] !== '') {
+                    params.set(key, extraParams[key]);
+                }
+            });
+        }
+        const response = await fetch(apiBase() + '?' + params.toString());
+        return response.json();
+    }
+
+    async function callPost(operation, bodyParams) {
+        const params = new URLSearchParams({ operation: operation });
+        if (bodyParams) {
+            Object.keys(bodyParams).forEach(key => params.set(key, bodyParams[key]));
+        }
+        const response = await fetch(apiBase(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+        });
+        return response.json();
+    }
+
+    async function fetchLogs() {
+        try {
+            const logs = await callGet('logs');
+            const body = document.getElementById('logsBody');
+            body.innerHTML = '';
+
+            if (logs.length === 0) {
+                body.innerHTML = '<tr><td colspan="4">No logs found.</td></tr>';
+                return;
+            }
+
+            logs.forEach(log => {
+                const row = document.createElement('tr');
+                row.innerHTML =
+                    '<td>' + log.employeeId + '</td>' +
+                    '<td>' + log.action + '</td>' +
+                    '<td>' + log.date + '</td>' +
+                    '<td>' + log.time + '</td>';
+                body.appendChild(row);
+            });
+        } catch (err) {
+            updateStatus('Failed to load logs.', true);
+        }
+    }
+
+    async function refreshDateOptions() {
+        try {
+            const dates = await callGet('dates');
+            const filter = document.getElementById('dateFilter');
+            const current = filter.value;
+            filter.innerHTML = '<option value="All Dates">All Dates</option>';
+            dates.forEach(date => {
+                const opt = document.createElement('option');
+                opt.value = date;
+                opt.textContent = date;
+                filter.appendChild(opt);
+            });
+            if (current) {
+                filter.value = current;
+            }
+            if (!filter.value) {
+                filter.value = 'All Dates';
+            }
+        } catch (err) {
+            updateStatus('Failed to refresh date filter.', true);
+        }
+    }
+
+    async function refreshAll() {
+        await fetchLogs();
+        await refreshDateOptions();
+    }
+
+    async function submitLog(action) {
+        const employeeId = document.getElementById('employeeId').value.trim();
+        if (!employeeId) {
+            updateStatus('Please enter Employee ID.', true);
+            return;
+        }
+
+        try {
+            const result = await callPost('add', { employeeId: employeeId, action: action });
+            updateStatus(result.message, !result.success);
+            if (result.success) {
+                document.getElementById('employeeId').value = '';
+                await refreshAll();
+            }
+        } catch (err) {
+            updateStatus('Failed to submit log.', true);
+        }
+    }
+
+    async function showAllLogs() {
+        try {
+            const logs = await callGet('logs');
+            if (!logs.length) {
+                setOutput('No logs found.');
+                return;
+            }
+            const lines = logs.map(log => `${log.employeeId} | ${log.action} | ${log.date} | ${log.time}`);
+            setOutput('=== ATTENDANCE LOGS ===\n' + lines.join('\n'));
+        } catch (err) {
+            updateStatus('Failed to display logs.', true);
+        }
+    }
+
+    async function showLateLogins() {
+        try {
+            const logs = await callGet('late');
+            if (!logs.length) {
+                setOutput('No late logins found.');
+                return;
+            }
+            const lines = logs.map(log => `${log.employeeId} | ${log.action} | ${log.date} | ${log.time}`);
+            setOutput('=== LATE LOGINS (>9AM) ===\n' + lines.join('\n'));
+        } catch (err) {
+            updateStatus('Failed to fetch late logins.', true);
+        }
+    }
+
+    async function showDurations() {
+        try {
+            const durations = await callGet('durations');
+            const keys = Object.keys(durations);
+            if (!keys.length) {
+                setOutput('No session data available.');
+                return;
+            }
+            const lines = keys.map(emp => `${emp}: ${durations[emp]}`);
+            setOutput('=== TOTAL SESSION DURATIONS ===\n' + lines.join('\n'));
+        } catch (err) {
+            updateStatus('Failed to calculate durations.', true);
+        }
+    }
+
+    async function showStatistics() {
+        try {
+            const stats = await callGet('stats');
+            setOutput(
+                '=== STATISTICS ===\n' +
+                `Total Logs: ${stats.totalLogs}\n` +
+                `Logins: ${stats.logins}\n` +
+                `Logouts: ${stats.logouts}\n` +
+                `Unique Employees: ${stats.uniqueEmployees}`
+            );
+        } catch (err) {
+            updateStatus('Failed to load statistics.', true);
+        }
+    }
+
+    async function showAbsentees() {
+        if (selectedDate() === 'All Dates') {
+            setOutput('Please select a specific date to check absentees.');
+            return;
+        }
+        try {
+            const absentees = await callGet('absent');
+            if (!absentees.length) {
+                setOutput('All known employees were present.');
+                return;
+            }
+            setOutput('=== ABSENT EMPLOYEES ===\n' + absentees.join('\n'));
+        } catch (err) {
+            updateStatus('Failed to fetch absentees.', true);
+        }
+    }
+
+    async function searchEmployee() {
+        const employeeId = document.getElementById('searchEmployeeId').value.trim();
+        if (!employeeId) {
+            updateStatus('Enter employee ID to search.', true);
+            return;
+        }
+        try {
+            const result = await callGet('employee', { employeeId: employeeId });
+            if (!result.success) {
+                setOutput(result.message || 'Employee not found.');
+                return;
+            }
+            const logLines = (result.logs || []).map(log => `${log.action} | ${log.date} | ${log.time}`);
+            setOutput(
+                `=== EMPLOYEE ${result.employeeId} ===\n` +
+                `Total Working Time: ${result.totalDuration}\n` +
+                `Logins: ${result.logins}\n` +
+                `Logouts: ${result.logouts}\n\n` +
+                'Attendance Records:\n' +
+                (logLines.length ? logLines.join('\n') : 'No records found.')
+            );
+        } catch (err) {
+            updateStatus('Failed to search employee.', true);
+        }
+    }
+
+    async function loadSampleData() {
+        try {
+            const result = await callPost('sample');
+            updateStatus(result.message, !result.success);
+            if (result.success) {
+                await refreshAll();
+                setOutput('Sample data loaded.');
+            }
+        } catch (err) {
+            updateStatus('Failed to load sample data.', true);
+        }
+    }
+
+    async function clearAllLogs() {
+        const confirmed = confirm('Delete all attendance logs? This cannot be undone.');
+        if (!confirmed) {
+            return;
+        }
+        try {
+            const result = await callPost('clear');
+            updateStatus(result.message, !result.success);
+            if (result.success) {
+                await refreshAll();
+                setOutput('All logs cleared.');
+            }
+        } catch (err) {
+            updateStatus('Failed to clear logs.', true);
+        }
+    }
+
+    refreshAll();
+</script>
+</body>
+</html>

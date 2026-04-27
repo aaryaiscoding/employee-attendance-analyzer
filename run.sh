@@ -30,11 +30,18 @@ case "$1" in
         echo ""
         java -cp "$CLASSPATH" com.attendance.AttendanceLogAnalyzer
         ;;
+    "war")
+        echo "Web deployment is now external to this project."
+        echo "Build the WAR with ./build.sh, then deploy:"
+        echo "  $PROJECT_DIR/target/attendance.war"
+        echo "Copy this file into your Tomcat webapps/ folder and start Tomcat."
+        ;;
     *)
-        echo "Usage: $0 {gui|analyzer}"
+        echo "Usage: $0 {gui|analyzer|war}"
         echo ""
         echo "  gui       - Launch the Java Swing GUI interface (RECOMMENDED)"
         echo "  analyzer  - Run the console-based attendance log analyzer"
+        echo "  war       - Show deployment instructions for Tomcat WAR deployment"
         exit 1
         ;;
 esac
