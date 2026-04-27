@@ -7,6 +7,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.ZonedDateTime;
@@ -16,6 +17,10 @@ import java.util.List;
 import java.util.Map;
 
 public class AttendanceServlet extends HttpServlet {
+    private static final String SESSION_AUTH_KEY = "authenticated";
+    private static final String LOGIN_USERNAME = "admin";
+    private static final String LOGIN_PASSWORD = "luffykapil";
+
     private AttendanceLogAnalyzer analyzer;
 
     @Override
@@ -25,14 +30,34 @@ public class AttendanceServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        resp.setContentType("application/json");
-        resp.setCharacterEncoding("UTF-8");
-        PrintWriter out = resp.getWriter();
-
         String operation = req.getParameter("operation");
         if (operation == null || operation.trim().isEmpty()) {
             operation = "logs";
         }
+
+        if ("loginPage".equals(operation)) {
+            renderLoginPage(resp, null);
+            return;
+        }
+
+        if ("logout".equals(operation)) {
+            HttpSession session = req.getSession(false);
+            if (session != null) {
+                session.invalidate();
+            }
+            resp.sendRedirect(req.getContextPath() + "/api/attendance?operation=loginPage");
+            return;
+        }
+
+        if (!isAuthenticated(req)) {
+            resp.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            writeJson(resp, "{\"success\": false, \"message\": \"Please login first\"}");
+            return;
+        }
+
+        resp.setContentType("application/json");
+        resp.setCharacterEncoding("UTF-8");
+        PrintWriter out = resp.getWriter();
         String targetDate = req.getParameter("date");
 
         try {
@@ -73,14 +98,25 @@ public class AttendanceServlet extends HttpServlet {
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        resp.setContentType("application/json");
-        resp.setCharacterEncoding("UTF-8");
-        PrintWriter out = resp.getWriter();
-
         String operation = req.getParameter("operation");
         if (operation == null || operation.trim().isEmpty()) {
             operation = "add";
         }
+
+        if ("login".equals(operation)) {
+            handleLogin(req, resp);
+            return;
+        }
+
+        if (!isAuthenticated(req)) {
+            resp.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            writeJson(resp, "{\"success\": false, \"message\": \"Please login first\"}");
+            return;
+        }
+
+        resp.setContentType("application/json");
+        resp.setCharacterEncoding("UTF-8");
+        PrintWriter out = resp.getWriter();
 
         try {
             if ("add".equals(operation)) {
@@ -118,6 +154,69 @@ public class AttendanceServlet extends HttpServlet {
             out.print("{\"success\": false, \"message\": \"Internal Server Error\"}");
             e.printStackTrace();
         }
+        out.flush();
+    }
+
+    private void handleLogin(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String username = req.getParameter("username");
+        String password = req.getParameter("password");
+
+        boolean validCredentials = LOGIN_USERNAME.equals(username) && LOGIN_PASSWORD.equals(password);
+        if (validCredentials) {
+            HttpSession session = req.getSession(true);
+            session.setAttribute(SESSION_AUTH_KEY, Boolean.TRUE);
+            resp.sendRedirect(req.getContextPath() + "/index.html");
+            return;
+        }
+
+        renderLoginPage(resp, "Invalid username or password");
+    }
+
+    private boolean isAuthenticated(HttpServletRequest req) {
+        HttpSession session = req.getSession(false);
+        return session != null && Boolean.TRUE.equals(session.getAttribute(SESSION_AUTH_KEY));
+    }
+
+    private void writeJson(HttpServletResponse resp, String json) throws IOException {
+        resp.setContentType("application/json");
+        resp.setCharacterEncoding("UTF-8");
+        PrintWriter out = resp.getWriter();
+        out.print(json);
+        out.flush();
+    }
+
+    private void renderLoginPage(HttpServletResponse resp, String errorMessage) throws IOException {
+        resp.setContentType("text/html");
+        resp.setCharacterEncoding("UTF-8");
+
+        PrintWriter out = resp.getWriter();
+        out.print("<!DOCTYPE html>");
+        out.print("<html lang=\"en\"><head><meta charset=\"UTF-8\">");
+        out.print("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
+        out.print("<title>Attendance Login</title>");
+        out.print("<style>");
+        out.print("body{font-family:Arial,sans-serif;background:#f3f4f6;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;}");
+        out.print(".card{background:#fff;padding:1.5rem;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.08);width:min(92vw,360px);}");
+        out.print("h2{margin-top:0;margin-bottom:1rem;color:#111827;}");
+        out.print("label{display:block;margin-bottom:.35rem;color:#374151;font-size:.92rem;}");
+        out.print("input{width:100%;padding:.6rem;border:1px solid #d1d5db;border-radius:6px;margin-bottom:.85rem;box-sizing:border-box;}");
+        out.print("button{width:100%;padding:.65rem;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;}");
+        out.print(".error{color:#dc2626;background:#fee2e2;border:1px solid #fecaca;padding:.55rem;border-radius:6px;margin-bottom:.8rem;font-size:.9rem;}");
+        out.print("</style></head><body>");
+        out.print("<div class=\"card\"><h2>Employee Attendance Login</h2>");
+        if (errorMessage != null && !errorMessage.trim().isEmpty()) {
+            out.print("<div class=\"error\">" + escapeHtml(errorMessage) + "</div>");
+        }
+        out.print("<form method=\"post\" action=\"");
+        out.print("?");
+        out.print("\">");
+        out.print("<input type=\"hidden\" name=\"operation\" value=\"login\">");
+        out.print("<label for=\"username\">Username</label>");
+        out.print("<input id=\"username\" type=\"text\" name=\"username\" placeholder=\"Enter username\" required>");
+        out.print("<label for=\"password\">Password</label>");
+        out.print("<input id=\"password\" type=\"password\" name=\"password\" placeholder=\"Enter password\" required>");
+        out.print("<button type=\"submit\">Login</button>");
+        out.print("</form></div></body></html>");
         out.flush();
     }
 
@@ -242,5 +341,17 @@ public class AttendanceServlet extends HttpServlet {
             .replace("\n", "\\n")
             .replace("\r", "\\r")
             .replace("\t", "\\t");
+    }
+
+    private String escapeHtml(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&#39;");
     }
 }
